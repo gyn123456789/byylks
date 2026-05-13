@@ -1,759 +1,303 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
-#include <map>
 #include <vector>
 #include <string>
 #include <cctype>
 
 using namespace std;
 
-//
-// ======================================================
-// 编译原理 —— 完整符号表系统
-//
-// 包含：
-// 1. 关键字表
-// 2. 界符表
-// 3. 常数表 CONSL
-// 4. 类型表 TYPEL
-// 5. 数组表 AINFL
-// 6. 结构表 RINFL
-// 7. 函数表 PFINFL
-// 8. 活动记录表 VALL
-// 9. 长度表 LENL
-// 10. 总符号表 SYNBL
-//
-// ======================================================
-//
-
-//
-// ======================================================
-// 基本结构定义
-// ======================================================
-//
-
-// --------------------
-// 类型表 TYPEL
-// --------------------
-struct TypeNode {
-    string TVAL;     // i r c b a d
-    int TPOINT;      // 指向其他表
-
-    TypeNode(string t = "", int p = -1)
-        : TVAL(t), TPOINT(p) {}
+// ========================
+// ADDR
+// ========================
+struct Addr {
+    string table;
+    int index;
+    Addr(string t="", int i=-1) : table(t), index(i) {}
 };
 
-// --------------------
+// ========================
+// TYPEL
+// ========================
+struct TypeNode {
+    string TVAL; // i/r/c/b/a/d
+    int TPOINT;  // 指向数组/结构体表索引
+    int LEN;     // 类型长度
+    TypeNode(string tv="", int tp=-1, int len=0)
+        : TVAL(tv), TPOINT(tp), LEN(len) {}
+};
+
+// ========================
 // 数组表 AINFL
-// --------------------
+// ========================
 struct ArrayInfo {
     int LOW;
     int UP;
-    int CTP;      // 成分类型指针
-    int CLEN;     // 成分长度
-
-    ArrayInfo(int l=0, int u=0,
-              int ctp=-1, int clen=0)
-        : LOW(l), UP(u),
-          CTP(ctp), CLEN(clen) {}
+    string CTP; // 基类型 itp/rtp/ctp/btp 或 TYPEL[index]
+    int CLEN;   // 元素长度
+    ArrayInfo(int l=0,int u=0,string bt="",int clen=0)
+        : LOW(l), UP(u), CTP(bt), CLEN(clen) {}
 };
 
-// --------------------
-// 结构表 RINFL
-// --------------------
+// ========================
+// 结构体表 RINFL
+// ========================
 struct RecordInfo {
     string ID;
     int OFF;
-    int TP;
-
-    RecordInfo(string id="",
-               int off=0,
-               int tp=-1)
+    string TP; // 基类型 itp/rtp/ctp/btp 或 TYPEL[index]
+    RecordInfo(string id="", int off=0, string tp="")
         : ID(id), OFF(off), TP(tp) {}
 };
 
-// --------------------
-// 函数表 PFINFL
-// --------------------
-struct FunctionInfo {
-
-    int LEVEL;
-    int OFF;
-    int FN;
-    string ENTRY;
-
-    vector<string> PARAMS;
-
-    FunctionInfo(
-        int level=0,
-        int off=0,
-        int fn=0,
-        string entry=""
-    )
-        : LEVEL(level),
-          OFF(off),
-          FN(fn),
-          ENTRY(entry) {}
-};
-
-// --------------------
+// ========================
 // 活动记录表 VALL
-// --------------------
+// ========================
 struct ValueInfo {
-
     string NAME;
     int LEVEL;
     int OFFSET;
-
-    ValueInfo(string n="",
-              int l=0,
-              int off=0)
-        : NAME(n),
-          LEVEL(l),
-          OFFSET(off) {}
+    ValueInfo(string n="",int l=0,int off=0)
+        : NAME(n), LEVEL(l), OFFSET(off) {}
 };
 
-// --------------------
+// ========================
 // 总符号表 SYNBL
-// --------------------
+// ========================
 struct Symbol {
-
     string NAME;
-    int TYPE;      // 指向TYPEL
-    string CAT;    // v c f t vn vf
-    int ADDR;      // 指向其他表
-
-    Symbol(string n="",
-           int t=-1,
-           string c="",
-           int a=-1)
-        : NAME(n),
-          TYPE(t),
-          CAT(c),
-          ADDR(a) {}
+    string TYPE; // 基本类型或 TYPEL[index]
+    string CAT;  // v/c/f/t
+    Addr ADDR;
+    Symbol(string n="", string t="", string c="", Addr a=Addr())
+        : NAME(n), TYPE(t), CAT(c), ADDR(a) {}
 };
 
-//
-// ======================================================
-// 符号表系统类
-// ======================================================
-//
+// ========================
+// 符号表系统
+// ========================
 class SymbolTableSystem {
-
 private:
-
-    //
-    // 关键字表
-    //
-    map<string, int> keywordTable;
-
-    //
-    // 界符表
-    //
-    map<string, int> delimiterTable;
-
-    //
-    // 常数表 CONSL
-    //
     vector<string> CONSL;
-
-    //
-    // 长度表 LENL
-    //
-    vector<int> LENL;
-
-    //
-    // 类型表 TYPEL
-    //
     vector<TypeNode> TYPEL;
-
-    //
-    // 数组表 AINFL
-    //
     vector<ArrayInfo> AINFL;
-
-    //
-    // 结构表 RINFL
-    //
     vector<RecordInfo> RINFL;
-
-    //
-    // 函数表 PFINFL
-    //
-    vector<FunctionInfo> PFINFL;
-
-    //
-    // 活动记录表 VALL
-    //
     vector<ValueInfo> VALL;
-
-    //
-    // 总符号表 SYNBL
-    //
     vector<Symbol> SYNBL;
+    int currentOffset = 0;
+
+    // 基本类型长度
+    int getTypeLength(const string &type) {
+        if(type=="itp") return 4;
+        if(type=="rtp") return 8;
+        if(type=="ctp") return 1;
+        if(type=="btp") return 1;
+        if(type.substr(0,5)=="TYPEL") {
+            int idx = stoi(type.substr(6));
+            return TYPEL[idx].LEN;
+        }
+        return 0;
+    }
+
+    bool isNumber(const string &s) {
+        if(s.empty()) return false;
+        bool dot=false;
+        for(char c:s){
+            if(c=='.'){ if(dot) return false; dot=true; }
+            else if(!isdigit(c)) return false;
+        }
+        return true;
+    }
+
+    int lastStructTypeIndex = -1; // 保存上一次定义的结构体类型索引
 
 public:
+    void analyzeCode(const string &code) {
+        string codeCopy = code;
+        for(auto &c: codeCopy) if(c=='\n') c=' ';
+        stringstream ss(codeCopy);
+        string token;
+        string prevType="";
+        bool inStruct=false;
+        string structName;
+        vector<pair<string,string>> structMembers;
 
-    //
-    // ==================================================
-    // 构造函数
-    // ==================================================
-    //
-    SymbolTableSystem() {
+        while(ss>>token){
+            if(token=="int") prevType="itp";
+            else if(token=="float") prevType="rtp";
+            else if(token=="char") prevType="ctp";
+            else if(token=="bool") prevType="btp";
+            else if(token=="struct"){
+                ss>>structName;
+                if(!structName.empty() && (structName.back()=='{' || structName.back()==';')) 
+                    structName.pop_back();
+                inStruct=true;
+                structMembers.clear();
+            }
+            else if(inStruct){
+                if(token=="{") continue;
+                if(token.find('}') != string::npos){
+                    lastStructTypeIndex = addStruct(structName, structMembers);
+                    inStruct=false;
+                    continue;
+                }
+                // 成员类型
+                string memberType = token;
+                string memberName;
+                if(ss >> memberName){
+                    if(!memberName.empty() && memberName.back()==';') memberName.pop_back();
+                    structMembers.push_back({memberName, memberType});
+                }
+            }
+            else if(prevType!=""){
+                size_t pos = token.find('[');
+                string varName = (pos!=string::npos) ? token.substr(0,pos) : token;
+                if(!varName.empty() && varName.back()==';') varName.pop_back();
 
-        initKeywordTable();
-        initDelimiterTable();
-        initBasicTypes();
+                if(pos!=string::npos){
+                    string bounds = token.substr(pos+1);
+                    size_t closePos = bounds.find(']');
+                    if(closePos != string::npos) bounds = bounds.substr(0,closePos);
+                    int low=1,up=10;
+                    size_t dotpos=bounds.find("..");
+                    if(dotpos!=string::npos){
+                        low=stoi(bounds.substr(0,dotpos));
+                        up=stoi(bounds.substr(dotpos+2));
+                    }
+                    addArray(varName,low,up,prevType);
+                } else {
+                    addVariable(varName,prevType);
+                }
+                prevType="";
+            }
+            else if(lastStructTypeIndex!=-1 && token == structName){
+                // 结构体变量声明
+                string varName;
+                if(ss >> varName){
+                    if(!varName.empty() && varName.back()==';') varName.pop_back();
+                    addVariable(varName, "TYPEL:"+to_string(lastStructTypeIndex));
+                }
+            }
+            else if(isNumber(token)){
+                addConstant(token);
+            }
+        }
     }
 
-    //
-    // ==================================================
-    // 初始化关键字表
-    // ==================================================
-    //
-    void initKeywordTable() {
-
-        keywordTable = {
-
-            {"int",1},
-            {"float",2},
-            {"double",3},
-            {"char",4},
-            {"bool",5},
-            {"if",6},
-            {"else",7},
-            {"while",8},
-            {"for",9},
-            {"return",10},
-            {"void",11},
-            {"struct",12}
-        };
-    }
-
-    //
-    // ==================================================
-    // 初始化界符表
-    // ==================================================
-    //
-    void initDelimiterTable() {
-
-        delimiterTable = {
-
-            {"+",1},
-            {"-",2},
-            {"*",3},
-            {"/",4},
-            {"=",5},
-            {"==",6},
-            {"<",7},
-            {">",8},
-            {"(",9},
-            {")",10},
-            {"{",11},
-            {"}",12},
-            {";",13},
-            {",",14}
-        };
-    }
-
-    //
-    // ==================================================
-    // 初始化基本类型
-    // ==================================================
-    //
-    void initBasicTypes() {
-
-        //
-        // TYPEL
-        //
-
-        TYPEL.push_back(TypeNode("i",-1)); // 0
-        TYPEL.push_back(TypeNode("r",-1)); // 1
-        TYPEL.push_back(TypeNode("c",-1)); // 2
-        TYPEL.push_back(TypeNode("b",-1)); // 3
-
-        //
-        // LENL
-        //
-
-        LENL.push_back(4); // int
-        LENL.push_back(8); // real
-        LENL.push_back(1); // char
-        LENL.push_back(1); // bool
-    }
-
-    //
-    // ==================================================
-    // 插入常数
-    // ==================================================
-    //
-    int addConstant(string value) {
-
+    int addConstant(const string &value){
+        for(int i=0;i<CONSL.size();i++) if(CONSL[i]==value) return i;
         CONSL.push_back(value);
-
-        return CONSL.size() - 1;
+        return CONSL.size()-1;
     }
 
-    //
-    // ==================================================
-    // 插入类型
-    // ==================================================
-    //
-    int addType(string tval, int tpoint) {
-
-        TYPEL.push_back(TypeNode(tval, tpoint));
-
-        return TYPEL.size() - 1;
+    void addVariable(const string &name,const string &type){
+        VALL.push_back(ValueInfo(name,1,currentOffset));
+        int vallIndex = VALL.size()-1;
+        SYNBL.push_back(Symbol(name,type,"v",Addr("VALL",vallIndex)));
+        currentOffset += getTypeLength(type);
     }
 
-    //
-    // ==================================================
-    // 插入数组类型
-    // ==================================================
-    //
-    int addArrayInfo(
-        int low,
-        int up,
-        int ctp,
-        int clen
-    ) {
-
-        AINFL.push_back(
-            ArrayInfo(low, up, ctp, clen)
-        );
-
-        return AINFL.size() - 1;
-    }
-
-    //
-    // ==================================================
-    // 插入结构体信息
-    // ==================================================
-    //
-    int addRecordInfo(
-        string id,
-        int off,
-        int tp
-    ) {
-
-        RINFL.push_back(
-            RecordInfo(id, off, tp)
-        );
-
-        return RINFL.size() - 1;
-    }
-
-    //
-    // ==================================================
-    // 插入函数信息
-    // ==================================================
-    //
-    int addFunctionInfo(
-        int level,
-        int off,
-        int fn,
-        string entry
-    ) {
-
-        PFINFL.push_back(
-            FunctionInfo(level, off, fn, entry)
-        );
-
-        return PFINFL.size() - 1;
-    }
-
-    //
-    // ==================================================
-    // 插入活动记录
-    // ==================================================
-    //
-    int addValueInfo(
-        string name,
-        int level,
-        int offset
-    ) {
-
-        VALL.push_back(
-            ValueInfo(name, level, offset)
-        );
-
-        return VALL.size() - 1;
-    }
-
-    //
-    // ==================================================
-    // 插入总符号表
-    // ==================================================
-    //
-    int addSymbol(
-        string name,
-        int type,
-        string cat,
-        int addr
-    ) {
-
-        SYNBL.push_back(
-            Symbol(name, type, cat, addr)
-        );
-
-        return SYNBL.size() - 1;
-    }
-
-    //
-    // ==================================================
-    // 创建数组类型
-    // ==================================================
-    //
-    int createArrayType(
-        int low,
-        int up,
-        int baseType
-    ) {
-
-        int len = LENL[baseType];
-
-        int arrayInfoIndex =
-            addArrayInfo(
-                low,
-                up,
-                baseType,
-                len
-            );
-
-        int typeIndex =
-            addType("a", arrayInfoIndex);
-
-        int totalLength =
-            (up - low + 1) * len;
-
-        LENL.push_back(totalLength);
-
+    int addArray(const string &name,int low,int up,const string &baseType){
+        int clen = getTypeLength(baseType);
+        AINFL.push_back(ArrayInfo(low,up,baseType,clen));
+        int arrIndex = AINFL.size()-1;
+        int totalLen = (up-low+1)*clen;
+        TYPEL.push_back(TypeNode("a",arrIndex,totalLen));
+        int typeIndex = TYPEL.size()-1;
+        SYNBL.push_back(Symbol(name,"TYPEL:"+to_string(typeIndex),"v",Addr("TYPEL",typeIndex)));
+        currentOffset += totalLen;
         return typeIndex;
     }
 
-    //
-    // ==================================================
-    // 输出关键字表
-    // ==================================================
-    //
-    void printKeywordTable() {
+    int addStruct(const string &name,const vector<pair<string,string>> &members){
+        int off=0;
+        int startIndex = RINFL.size();
+        for(auto &m:members){
+            string memberType;
+            // 如果成员是基本类型，直接用 itp/rtp/ctp/btp
+            if(m.second=="int"||m.second=="float"||m.second=="char"||m.second=="bool")
+                memberType = m.second;
+            else if(m.second.substr(0,6)=="TYPEL:") // 数组或结构体类型
+                memberType = m.second;
+            else
+                memberType = m.second; // 默认保留原样
 
-        cout << "\n======== KEYWORD TABLE ========\n";
-
-        for (auto& kv : keywordTable) {
-
-            cout << "<"
-                 << kv.first
-                 << ", "
-                 << kv.second
-                 << ">\n";
+            RINFL.push_back(RecordInfo(m.first, off, memberType));
+            off += getTypeLength(memberType);
         }
+        TYPEL.push_back(TypeNode("d",startIndex,off));
+        int typeIndex = TYPEL.size()-1;
+        SYNBL.push_back(Symbol(name,"TYPEL:"+to_string(typeIndex),"v",Addr("TYPEL",typeIndex)));
+        currentOffset += off;
+        return typeIndex;
     }
 
-    //
-    // ==================================================
-    // 输出界符表
-    // ==================================================
-    //
-    void printDelimiterTable() {
-
-        cout << "\n======== DELIMITER TABLE ========\n";
-
-        for (auto& kv : delimiterTable) {
-
-            cout << "<"
-                 << kv.first
-                 << ", "
-                 << kv.second
-                 << ">\n";
+    void printCONSL(){
+        cout<<"\n======== CONSL ========\n";
+        for(int i=0;i<CONSL.size();i++)
+            cout<<i<<" : "<<CONSL[i]<<endl;
+    }
+    void printTYPEL(){
+        cout<<"\n======== TYPEL ========\n";
+        cout<<left<<setw(10)<<"INDEX"<<setw(10)<<"TVAL"<<setw(10)<<"TPOINT"<<setw(10)<<"LEN"<<endl;
+        for(int i=0;i<TYPEL.size();i++)
+            cout<<left<<setw(10)<<i<<setw(10)<<TYPEL[i].TVAL<<setw(10)<<TYPEL[i].TPOINT<<setw(10)<<TYPEL[i].LEN<<endl;
+    }
+    void printAINFL(){
+        cout<<"\n======== AINFL ========\n";
+        cout<<left<<setw(10)<<"INDEX"<<setw(10)<<"LOW"<<setw(10)<<"UP"<<setw(15)<<"BASETYPE"<<setw(10)<<"CLEN"<<endl;
+        for(int i=0;i<AINFL.size();i++)
+            cout<<left<<setw(10)<<i<<setw(10)<<AINFL[i].LOW<<setw(10)<<AINFL[i].UP<<setw(15)<<AINFL[i].CTP<<setw(10)<<AINFL[i].CLEN<<endl;
+    }
+    void printRINFL(){
+        cout<<"\n======== RINFL ========\n";
+        cout<<left<<setw(15)<<"ID"<<setw(10)<<"OFF"<<setw(15)<<"TP"<<endl;
+        for(auto &r:RINFL)
+            cout<<left<<setw(15)<<r.ID<<setw(10)<<r.OFF<<setw(15)<<r.TP<<endl;
+    }
+    void printVALL(){
+        cout<<"\n======== VALL ========\n";
+        cout<<left<<setw(15)<<"NAME"<<setw(10)<<"LEVEL"<<setw(10)<<"OFFSET"<<endl;
+        for(auto &v:VALL)
+            cout<<left<<setw(15)<<v.NAME<<setw(10)<<v.LEVEL<<setw(10)<<v.OFFSET<<endl;
+    }
+    void printSYNBL(){
+        cout<<"\n======== SYNBL ========\n";
+        cout<<left<<setw(15)<<"NAME"<<setw(10)<<"TYPE"<<setw(10)<<"CAT"<<setw(20)<<"ADDR"<<endl;
+        for(auto &s:SYNBL){
+            string addrStr = s.ADDR.table+"["+to_string(s.ADDR.index)+"]";
+            cout<<left<<setw(15)<<s.NAME<<setw(10)<<s.TYPE<<setw(10)<<s.CAT<<setw(20)<<addrStr<<endl;
         }
     }
-
-    //
-    // ==================================================
-    // 输出常数表
-    // ==================================================
-    //
-    void printCONSL() {
-
-        cout << "\n======== CONSL ========\n";
-
-        for (int i=0;i<CONSL.size();i++) {
-
-            cout << i
-                 << " : "
-                 << CONSL[i]
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出长度表
-    // ==================================================
-    //
-    void printLENL() {
-
-        cout << "\n======== LENL ========\n";
-
-        for (int i=0;i<LENL.size();i++) {
-
-            cout << i
-                 << " : "
-                 << LENL[i]
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出类型表
-    // ==================================================
-    //
-    void printTYPEL() {
-
-        cout << "\n======== TYPEL ========\n";
-
-        cout << left
-             << setw(10) << "INDEX"
-             << setw(10) << "TVAL"
-             << setw(10) << "TPOINT"
-             << endl;
-
-        for (int i=0;i<TYPEL.size();i++) {
-
-            cout << left
-                 << setw(10) << i
-                 << setw(10) << TYPEL[i].TVAL
-                 << setw(10) << TYPEL[i].TPOINT
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出数组表
-    // ==================================================
-    //
-    void printAINFL() {
-
-        cout << "\n======== AINFL ========\n";
-
-        cout << left
-             << setw(10) << "INDEX"
-             << setw(10) << "LOW"
-             << setw(10) << "UP"
-             << setw(10) << "CTP"
-             << setw(10) << "CLEN"
-             << endl;
-
-        for (int i=0;i<AINFL.size();i++) {
-
-            cout << left
-                 << setw(10) << i
-                 << setw(10) << AINFL[i].LOW
-                 << setw(10) << AINFL[i].UP
-                 << setw(10) << AINFL[i].CTP
-                 << setw(10) << AINFL[i].CLEN
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出函数表
-    // ==================================================
-    //
-    void printPFINFL() {
-
-        cout << "\n======== PFINFL ========\n";
-
-        cout << left
-             << setw(10) << "INDEX"
-             << setw(10) << "LEVEL"
-             << setw(10) << "OFF"
-             << setw(10) << "FN"
-             << setw(15) << "ENTRY"
-             << endl;
-
-        for (int i=0;i<PFINFL.size();i++) {
-
-            cout << left
-                 << setw(10) << i
-                 << setw(10) << PFINFL[i].LEVEL
-                 << setw(10) << PFINFL[i].OFF
-                 << setw(10) << PFINFL[i].FN
-                 << setw(15) << PFINFL[i].ENTRY
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出活动记录表
-    // ==================================================
-    //
-    void printVALL() {
-
-        cout << "\n======== VALL ========\n";
-
-        cout << left
-             << setw(15) << "NAME"
-             << setw(10) << "LEVEL"
-             << setw(10) << "OFFSET"
-             << endl;
-
-        for (auto& v : VALL) {
-
-            cout << left
-                 << setw(15) << v.NAME
-                 << setw(10) << v.LEVEL
-                 << setw(10) << v.OFFSET
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出总符号表
-    // ==================================================
-    //
-    void printSYNBL() {
-
-        cout << "\n======== SYNBL ========\n";
-
-        cout << left
-             << setw(15) << "NAME"
-             << setw(10) << "TYPE"
-             << setw(10) << "CAT"
-             << setw(10) << "ADDR"
-             << endl;
-
-        for (auto& s : SYNBL) {
-
-            cout << left
-                 << setw(15) << s.NAME
-                 << setw(10) << s.TYPE
-                 << setw(10) << s.CAT
-                 << setw(10) << s.ADDR
-                 << endl;
-        }
-    }
-
-    //
-    // ==================================================
-    // 输出所有表
-    // ==================================================
-    //
-    void printAll() {
-
-        printKeywordTable();
-
-        printDelimiterTable();
-
+    void printAll(){
         printCONSL();
-
-        printLENL();
-
         printTYPEL();
-
         printAINFL();
-
-        printPFINFL();
-
+        printRINFL();
         printVALL();
-
         printSYNBL();
     }
 };
 
-//
-// ======================================================
+// ========================
 // 测试
-// ======================================================
-//
-int main() {
-
+// ========================
+int main(){
     SymbolTableSystem sts;
 
-    //
-    // 常量
-    //
-    int c1 = sts.addConstant("3.14");
+    string code = R"(
+        int a = 10;
+        float b = 3.14;
+        char c;
+        int arr[1..10];
+        struct Student {
+            int id;
+            float score;
+        };
+        Student s1;
+    )";
 
-    //
-    // 创建数组类型
-    // arr[1..10] of int
-    //
-    int arrType =
-        sts.createArrayType(
-            1,
-            10,
-            0
-        );
-
-    //
-    // 函数信息
-    //
-    int funcAddr =
-        sts.addFunctionInfo(
-            1,
-            0,
-            2,
-            "main_entry"
-        );
-
-    //
-    // 活动记录
-    //
-    int aAddr =
-        sts.addValueInfo(
-            "a",
-            1,
-            0
-        );
-
-    //
-    // 总符号表
-    //
-
-    // 常量 pai
-    sts.addSymbol(
-        "pai",
-        1,
-        "c",
-        c1
-    );
-
-    // 类型 arr
-    sts.addSymbol(
-        "arr",
-        arrType,
-        "t",
-        arrType
-    );
-
-    // 变量 a
-    sts.addSymbol(
-        "a",
-        arrType,
-        "v",
-        aAddr
-    );
-
-    // 函数 main
-    sts.addSymbol(
-        "main",
-        1,
-        "f",
-        funcAddr
-    );
-
-    //
-    // 输出所有表
-    //
+    sts.analyzeCode(code);
     sts.printAll();
-
     return 0;
 }
