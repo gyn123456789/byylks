@@ -3,292 +3,164 @@
 #include <sstream>
 #include <vector>
 #include <string>
-#include <cctype>
+#include <map>
 
 using namespace std;
 
-// ========================
-// ADDR
-// ========================
+// ======================== 结构定义 ========================
 struct Addr {
-    string table;
-    int index;
+    string table; int index;
     Addr(string t="", int i=-1) : table(t), index(i) {}
 };
 
-// ========================
-// TYPEL
-// ========================
 struct TypeNode {
-    string TVAL; // i/r/c/b/a/d
-    int TPOINT;  // 指向数组/结构体表索引
-    int LEN;     // 类型长度
-    TypeNode(string tv="", int tp=-1, int len=0)
-        : TVAL(tv), TPOINT(tp), LEN(len) {}
+    string TVAL; // a: array, d: struct, itp/rtp/etc: basic
+    int TPOINT;  // 指向 AINFL 或 RINFL
+    int LEN;     // 总长度
+    TypeNode(string tv="", int tp=-1, int len=0) : TVAL(tv), TPOINT(tp), LEN(len) {}
 };
 
-// ========================
-// 数组表 AINFL
-// ========================
 struct ArrayInfo {
-    int LOW;
-    int UP;
-    string CTP; // 基类型 itp/rtp/ctp/btp 或 TYPEL[index]
+    int LOW, UP;
+    string CTP; // 元素基类型
     int CLEN;   // 元素长度
-    ArrayInfo(int l=0,int u=0,string bt="",int clen=0)
-        : LOW(l), UP(u), CTP(bt), CLEN(clen) {}
+    ArrayInfo(int l=0, int u=0, string c="", int cl=0) : LOW(l), UP(u), CTP(c), CLEN(cl) {}
 };
 
-// ========================
-// 结构体表 RINFL
-// ========================
 struct RecordInfo {
-    string ID;
-    int OFF;
-    string TP; // 基类型 itp/rtp/ctp/btp 或 TYPEL[index]
-    RecordInfo(string id="", int off=0, string tp="")
-        : ID(id), OFF(off), TP(tp) {}
+    string ID; int OFF; string TP;
+    RecordInfo(string id="", int off=0, string tp="") : ID(id), OFF(off), TP(tp) {}
 };
 
-// ========================
-// 活动记录表 VALL
-// ========================
 struct ValueInfo {
-    string NAME;
-    int LEVEL;
-    int OFFSET;
-    ValueInfo(string n="",int l=0,int off=0)
-        : NAME(n), LEVEL(l), OFFSET(off) {}
+    string NAME; int LEVEL; int OFFSET;
+    ValueInfo(string n="", int l=0, int off=0) : NAME(n), LEVEL(l), OFFSET(off) {}
 };
 
-// ========================
-// 总符号表 SYNBL
-// ========================
 struct Symbol {
-    string NAME;
-    string TYPE; // 基本类型或 TYPEL[index]
-    string CAT;  // v/c/f/t
-    Addr ADDR;
-    Symbol(string n="", string t="", string c="", Addr a=Addr())
-        : NAME(n), TYPE(t), CAT(c), ADDR(a) {}
+    string NAME; string TYPE; string CAT; Addr ADDR;
+    Symbol(string n="", string t="", string c="", Addr a=Addr()) : NAME(n), TYPE(t), CAT(c), ADDR(a) {}
 };
 
-// ========================
-// 符号表系统
-// ========================
+// ======================== 符号表系统 ========================
 class SymbolTableSystem {
 private:
-    vector<string> CONSL;
     vector<TypeNode> TYPEL;
     vector<ArrayInfo> AINFL;
     vector<RecordInfo> RINFL;
     vector<ValueInfo> VALL;
     vector<Symbol> SYNBL;
+    map<string, string> typeMap = {{"int","itp"}, {"float","rtp"}, {"char","ctp"}};
     int currentOffset = 0;
 
-    // 基本类型长度
-    int getTypeLength(const string &type) {
-        if(type=="itp") return 4;
-        if(type=="rtp") return 8;
-        if(type=="ctp") return 1;
-        if(type=="btp") return 1;
-        if(type.substr(0,5)=="TYPEL") {
-            int idx = stoi(type.substr(6));
-            return TYPEL[idx].LEN;
-        }
+    int getTypeLength(const string &t) {
+        if(t == "itp") return 4;
+        if(t == "rtp") return 8;
+        if(t == "ctp") return 1;
+        if(t.find("TYPEL:") == 0) return TYPEL[stoi(t.substr(6))].LEN;
         return 0;
     }
 
-    bool isNumber(const string &s) {
-        if(s.empty()) return false;
-        bool dot=false;
-        for(char c:s){
-            if(c=='.'){ if(dot) return false; dot=true; }
-            else if(!isdigit(c)) return false;
-        }
-        return true;
-    }
-
-    int lastStructTypeIndex = -1; // 保存上一次定义的结构体类型索引
-
 public:
-    void analyzeCode(const string &code) {
-        string codeCopy = code;
-        for(auto &c: codeCopy) if(c=='\n') c=' ';
-        stringstream ss(codeCopy);
-        string token;
-        string prevType="";
-        bool inStruct=false;
-        string structName;
-        vector<pair<string,string>> structMembers;
-
-        while(ss>>token){
-            if(token=="int") prevType="itp";
-            else if(token=="float") prevType="rtp";
-            else if(token=="char") prevType="ctp";
-            else if(token=="bool") prevType="btp";
-            else if(token=="struct"){
-                ss>>structName;
-                if(!structName.empty() && (structName.back()=='{' || structName.back()==';')) 
-                    structName.pop_back();
-                inStruct=true;
-                structMembers.clear();
-            }
-            else if(inStruct){
-                if(token=="{") continue;
-                if(token.find('}') != string::npos){
-                    lastStructTypeIndex = addStruct(structName, structMembers);
-                    inStruct=false;
-                    continue;
-                }
-                // 成员类型
-                string memberType = token;
-                string memberName;
-                if(ss >> memberName){
-                    if(!memberName.empty() && memberName.back()==';') memberName.pop_back();
-                    structMembers.push_back({memberName, memberType});
-                }
-            }
-            else if(prevType!=""){
-                size_t pos = token.find('[');
-                string varName = (pos!=string::npos) ? token.substr(0,pos) : token;
-                if(!varName.empty() && varName.back()==';') varName.pop_back();
-
-                if(pos!=string::npos){
-                    string bounds = token.substr(pos+1);
-                    size_t closePos = bounds.find(']');
-                    if(closePos != string::npos) bounds = bounds.substr(0,closePos);
-                    int low=1,up=10;
-                    size_t dotpos=bounds.find("..");
-                    if(dotpos!=string::npos){
-                        low=stoi(bounds.substr(0,dotpos));
-                        up=stoi(bounds.substr(dotpos+2));
-                    }
-                    addArray(varName,low,up,prevType);
-                } else {
-                    addVariable(varName,prevType);
-                }
-                prevType="";
-            }
-            else if(lastStructTypeIndex!=-1 && token == structName){
-                // 结构体变量声明
-                string varName;
-                if(ss >> varName){
-                    if(!varName.empty() && varName.back()==';') varName.pop_back();
-                    addVariable(varName, "TYPEL:"+to_string(lastStructTypeIndex));
-                }
-            }
-            else if(isNumber(token)){
-                addConstant(token);
-            }
-        }
-    }
-
-    int addConstant(const string &value){
-        for(int i=0;i<CONSL.size();i++) if(CONSL[i]==value) return i;
-        CONSL.push_back(value);
-        return CONSL.size()-1;
-    }
-
-    void addVariable(const string &name,const string &type){
-        VALL.push_back(ValueInfo(name,1,currentOffset));
-        int vallIndex = VALL.size()-1;
-        SYNBL.push_back(Symbol(name,type,"v",Addr("VALL",vallIndex)));
+    void addVariable(string name, string type) {
+        SYNBL.push_back(Symbol(name, type, "v", Addr("VALL", (int)VALL.size())));
+        VALL.push_back(ValueInfo(name, 1, currentOffset));
         currentOffset += getTypeLength(type);
     }
 
-    int addArray(const string &name,int low,int up,const string &baseType){
+    void addArray(string name, int low, int up, string baseType) {
         int clen = getTypeLength(baseType);
-        AINFL.push_back(ArrayInfo(low,up,baseType,clen));
-        int arrIndex = AINFL.size()-1;
-        int totalLen = (up-low+1)*clen;
-        TYPEL.push_back(TypeNode("a",arrIndex,totalLen));
-        int typeIndex = TYPEL.size()-1;
-        SYNBL.push_back(Symbol(name,"TYPEL:"+to_string(typeIndex),"v",Addr("TYPEL",typeIndex)));
+        int totalLen = (up - low + 1) * clen;
+        // 1. 填充 AINFL
+        AINFL.push_back(ArrayInfo(low, up, baseType, clen));
+        // 2. 填充 TYPEL
+        TYPEL.push_back(TypeNode("a", (int)AINFL.size() - 1, totalLen));
+        string typeStr = "TYPEL:" + to_string(TYPEL.size() - 1);
+        // 3. 填充 SYNBL 和 VALL
+        SYNBL.push_back(Symbol(name, typeStr, "v", Addr("VALL", (int)VALL.size())));
+        VALL.push_back(ValueInfo(name, 1, currentOffset));
         currentOffset += totalLen;
-        return typeIndex;
     }
 
-    int addStruct(const string &name,const vector<pair<string,string>> &members){
-        int off=0;
-        int startIndex = RINFL.size();
-        for(auto &m:members){
-            string memberType;
-            // 如果成员是基本类型，直接用 itp/rtp/ctp/btp
-            if(m.second=="int"||m.second=="float"||m.second=="char"||m.second=="bool")
-                memberType = m.second;
-            else if(m.second.substr(0,6)=="TYPEL:") // 数组或结构体类型
-                memberType = m.second;
-            else
-                memberType = m.second; // 默认保留原样
-
-            RINFL.push_back(RecordInfo(m.first, off, memberType));
-            off += getTypeLength(memberType);
+    void addStruct(string name, vector<pair<string, string>> members) {
+        int startR = RINFL.size();
+        int innerOff = 0;
+        for(auto &m : members) {
+            string mType = typeMap.count(m.second) ? typeMap[m.second] : m.second;
+            RINFL.push_back(RecordInfo(m.first, innerOff, mType));
+            innerOff += getTypeLength(mType);
         }
-        TYPEL.push_back(TypeNode("d",startIndex,off));
-        int typeIndex = TYPEL.size()-1;
-        SYNBL.push_back(Symbol(name,"TYPEL:"+to_string(typeIndex),"v",Addr("TYPEL",typeIndex)));
-        currentOffset += off;
-        return typeIndex;
+        TYPEL.push_back(TypeNode("d", startR, innerOff));
+        string tStr = "TYPEL:" + to_string(TYPEL.size() - 1);
+        SYNBL.push_back(Symbol(name, tStr, "t", Addr("TYPEL", (int)TYPEL.size()-1)));
+        typeMap[name] = tStr; 
     }
 
-    void printCONSL(){
-        cout<<"\n======== CONSL ========\n";
-        for(int i=0;i<CONSL.size();i++)
-            cout<<i<<" : "<<CONSL[i]<<endl;
-    }
-    void printTYPEL(){
-        cout<<"\n======== TYPEL ========\n";
-        cout<<left<<setw(10)<<"INDEX"<<setw(10)<<"TVAL"<<setw(10)<<"TPOINT"<<setw(10)<<"LEN"<<endl;
-        for(int i=0;i<TYPEL.size();i++)
-            cout<<left<<setw(10)<<i<<setw(10)<<TYPEL[i].TVAL<<setw(10)<<TYPEL[i].TPOINT<<setw(10)<<TYPEL[i].LEN<<endl;
-    }
-    void printAINFL(){
-        cout<<"\n======== AINFL ========\n";
-        cout<<left<<setw(10)<<"INDEX"<<setw(10)<<"LOW"<<setw(10)<<"UP"<<setw(15)<<"BASETYPE"<<setw(10)<<"CLEN"<<endl;
-        for(int i=0;i<AINFL.size();i++)
-            cout<<left<<setw(10)<<i<<setw(10)<<AINFL[i].LOW<<setw(10)<<AINFL[i].UP<<setw(15)<<AINFL[i].CTP<<setw(10)<<AINFL[i].CLEN<<endl;
-    }
-    void printRINFL(){
-        cout<<"\n======== RINFL ========\n";
-        cout<<left<<setw(15)<<"ID"<<setw(10)<<"OFF"<<setw(15)<<"TP"<<endl;
-        for(auto &r:RINFL)
-            cout<<left<<setw(15)<<r.ID<<setw(10)<<r.OFF<<setw(15)<<r.TP<<endl;
-    }
-    void printVALL(){
-        cout<<"\n======== VALL ========\n";
-        cout<<left<<setw(15)<<"NAME"<<setw(10)<<"LEVEL"<<setw(10)<<"OFFSET"<<endl;
-        for(auto &v:VALL)
-            cout<<left<<setw(15)<<v.NAME<<setw(10)<<v.LEVEL<<setw(10)<<v.OFFSET<<endl;
-    }
-    void printSYNBL(){
-        cout<<"\n======== SYNBL ========\n";
-        cout<<left<<setw(15)<<"NAME"<<setw(10)<<"TYPE"<<setw(10)<<"CAT"<<setw(20)<<"ADDR"<<endl;
-        for(auto &s:SYNBL){
-            string addrStr = s.ADDR.table+"["+to_string(s.ADDR.index)+"]";
-            cout<<left<<setw(15)<<s.NAME<<setw(10)<<s.TYPE<<setw(10)<<s.CAT<<setw(20)<<addrStr<<endl;
+    void analyzeCode(const string &code) {
+        stringstream ss(code);
+        string token;
+        while(ss >> token) {
+            if(typeMap.count(token)) {
+                string type = typeMap[token];
+                string var; ss >> var;
+                if(var.find('[') != string::npos) { // 数组处理
+                    size_t p1 = var.find('['), p2 = var.find(".."), p3 = var.find(']');
+                    string name = var.substr(0, p1);
+                    int low = stoi(var.substr(p1+1, p2-p1-1));
+                    int up = stoi(var.substr(p2+2, p3-p2-2));
+                    addArray(name, low, up, type);
+                } else { // 普通变量
+                    if(var.back() == ';') var.pop_back();
+                    addVariable(var, type);
+                }
+            } else if(token == "struct") {
+                string sName; ss >> sName;
+                if(sName.back() == '{') sName.pop_back(); else { string b; ss >> b; }
+                vector<pair<string,string>> members;
+                string mt, mn;
+                while(ss >> mt && mt != "};") {
+                    ss >> mn; if(mn.back() == ';') mn.pop_back();
+                    members.push_back({mn, mt});
+                }
+                addStruct(sName, members);
+            }
         }
     }
-    void printAll(){
-        printCONSL();
-        printTYPEL();
-        printAINFL();
-        printRINFL();
-        printVALL();
-        printSYNBL();
+
+    // ======================== 打印各表 ========================
+    void printAll() {
+        cout << "\n[ SYNBL - 主符号表 ]\n" << string(50, '-') << endl;
+        cout << left << setw(10) << "NAME" << setw(12) << "TYPE" << setw(6) << "CAT" << "ADDR" << endl;
+        for(auto &s : SYNBL) 
+            cout << setw(10) << s.NAME << setw(12) << s.TYPE << setw(6) << s.CAT << s.ADDR.table << "[" << s.ADDR.index << "]" << endl;
+
+        cout << "\n[ TYPEL - 类型表 ]\n" << string(40, '-') << endl;
+        cout << left << setw(6) << "IDX" << setw(8) << "TVAL" << setw(10) << "TPOINT" << "LEN" << endl;
+        for(int i=0; i<TYPEL.size(); ++i)
+            cout << setw(6) << i << setw(8) << TYPEL[i].TVAL << setw(10) << TYPEL[i].TPOINT << TYPEL[i].LEN << endl;
+
+        cout << "\n[ AINFL - 数组信息表 ]\n" << string(50, '-') << endl;
+        cout << left << setw(6) << "IDX" << setw(8) << "LOW" << setw(8) << "UP" << setw(10) << "CTP" << "CLEN" << endl;
+        for(int i=0; i<AINFL.size(); ++i)
+            cout << setw(6) << i << setw(8) << AINFL[i].LOW << setw(8) << AINFL[i].UP << setw(10) << AINFL[i].CTP << AINFL[i].CLEN << endl;
+
+        cout << "\n[ RINFL - 结构体成员表 ]\n" << string(40, '-') << endl;
+        cout << left << setw(10) << "ID" << setw(10) << "OFF" << "TP" << endl;
+        for(auto &r : RINFL)
+            cout << setw(10) << r.ID << setw(10) << r.OFF << r.TP << endl;
+
+        cout << "\n[ VALL - 活动记录表/地址表 ]\n" << string(40, '-') << endl;
+        cout << left << setw(10) << "NAME" << setw(10) << "LEVEL" << "OFFSET" << endl;
+        for(auto &v : VALL)
+            cout << setw(10) << v.NAME << setw(10) << v.LEVEL << v.OFFSET << endl;
     }
 };
 
-// ========================
-// 测试
-// ========================
-int main(){
+int main() {
     SymbolTableSystem sts;
-
     string code = R"(
-        int a = 10;
-        float b = 3.14;
-        char c;
+        int a;
+        float b;
         int arr[1..10];
         struct Student {
             int id;
@@ -296,7 +168,6 @@ int main(){
         };
         Student s1;
     )";
-
     sts.analyzeCode(code);
     sts.printAll();
     return 0;
